@@ -48,10 +48,16 @@ export interface AzureAISearchQueryOptions {
  */
 export interface AzureAISearchConfig {
   readonly client?: SearchClient<AzureAISearchDocument>;
+  readonly contentField?: string;
+  readonly contentVectorField?: string;
   readonly indexName?: string;
   readonly endpoint?: string;
   readonly key?: string;
+  readonly metadataAttrsField?: string;
+  readonly metadataField?: string;
+  readonly metadataSourceField?: string;
   readonly search: AzureAISearchQueryOptions;
+  readonly userAgentPrefix?: string;
 }
 
 /**
@@ -133,6 +139,18 @@ export class AzureAISearchVectorStore extends VectorStore {
 
   private readonly options: AzureAISearchQueryOptions;
 
+  private readonly contentVectorField: string;
+
+  private readonly contentField: string;
+
+  private readonly metadataField: string;
+
+  private readonly metadataAttrsField: string;
+
+  private readonly metadataSourceField: string;
+
+  private readonly userAgentPrefix: string;
+
   constructor(embeddings: EmbeddingsInterface, config: AzureAISearchConfig) {
     super(embeddings, config);
 
@@ -146,18 +164,25 @@ export class AzureAISearchVectorStore extends VectorStore {
       );
     }
 
+    this.contentField = config.contentField ?? DEFAULT_FIELD_CONTENT;
+    this.contentVectorField =
+      config.contentVectorField ?? DEFAULT_FIELD_CONTENT_VECTOR;
     this.indexName = config.indexName ?? "vectorsearch";
+    this.metadataField = config.metadataField ?? DEFAULT_FIELD_METADATA;
+    this.metadataAttrsField = DEFAULT_FIELD_METADATA_ATTRS;
+    this.metadataSourceField = DEFAULT_FIELD_METADATA_SOURCE;
+    this.userAgentPrefix = config.userAgentPrefix ?? USER_AGENT_PREFIX;
 
     if (!config.client) {
       // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
       const credential = new AzureKeyCredential(key!);
       // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
       this.client = new SearchClient(endpoint!, this.indexName, credential, {
-        userAgentOptions: { userAgentPrefix: USER_AGENT_PREFIX },
+        userAgentOptions: { userAgentPrefix: this.userAgentPrefix },
       });
       // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
       const indexClient = new SearchIndexClient(endpoint!, credential, {
-        userAgentOptions: { userAgentPrefix: USER_AGENT_PREFIX },
+        userAgentOptions: { userAgentPrefix: this.userAgentPrefix },
       });
 
       // Start initialization, but don't wait for it to finish here
@@ -415,7 +440,7 @@ export class AzureAISearchVectorStore extends VectorStore {
             kind: "vector",
             vector,
             kNearestNeighborsCount: k,
-            fields: [DEFAULT_FIELD_CONTENT_VECTOR],
+            fields: [this.contentVectorField],
           },
         ],
         filterMode: filter?.vectorFilterMode,
@@ -428,14 +453,13 @@ export class AzureAISearchVectorStore extends VectorStore {
 
     for await (const item of results) {
       const document = new Document<AzureAISearchDocumentMetadata>({
-        pageContent: item.document[DEFAULT_FIELD_CONTENT],
+        pageContent: item.document[this.contentField],
         metadata: {
-          ...item.document[DEFAULT_FIELD_METADATA],
+          ...item.document[this.metadataField],
         },
       });
       if (filter?.includeEmbeddings) {
-        document.metadata.embedding =
-          item.document[DEFAULT_FIELD_CONTENT_VECTOR];
+        document.metadata.embedding = item.document[this.contentVectorField];
       }
       docsWithScore.push([document, item.score]);
     }
@@ -468,7 +492,7 @@ export class AzureAISearchVectorStore extends VectorStore {
             kind: "vector",
             vector,
             kNearestNeighborsCount: k,
-            fields: [DEFAULT_FIELD_CONTENT_VECTOR],
+            fields: [this.contentVectorField],
           },
         ],
         filterMode: filter?.vectorFilterMode,
@@ -485,14 +509,13 @@ export class AzureAISearchVectorStore extends VectorStore {
 
     for await (const item of results) {
       const document = new Document<AzureAISearchDocumentMetadata>({
-        pageContent: item.document[DEFAULT_FIELD_CONTENT],
+        pageContent: item.document[this.contentField],
         metadata: {
-          ...item.document[DEFAULT_FIELD_METADATA],
+          ...item.document[this.metadataField],
         },
       });
       if (filter?.includeEmbeddings) {
-        document.metadata.embedding =
-          item.document[DEFAULT_FIELD_CONTENT_VECTOR];
+        document.metadata.embedding = item.document[this.contentVectorField];
       }
       docsWithScore.push([document, item.score]);
     }
@@ -521,7 +544,7 @@ export class AzureAISearchVectorStore extends VectorStore {
             kind: "vector",
             vector: query,
             kNearestNeighborsCount: k,
-            fields: [DEFAULT_FIELD_CONTENT_VECTOR],
+            fields: [this.contentVectorField],
           },
         ],
         filterMode: filter?.vectorFilterMode,
@@ -533,14 +556,13 @@ export class AzureAISearchVectorStore extends VectorStore {
 
     for await (const item of results) {
       const document = new Document<AzureAISearchDocumentMetadata>({
-        pageContent: item.document[DEFAULT_FIELD_CONTENT],
+        pageContent: item.document[this.contentField],
         metadata: {
-          ...item.document[DEFAULT_FIELD_METADATA],
+          ...item.document[this.metadataField],
         },
       });
       if (filter?.includeEmbeddings) {
-        document.metadata.embedding =
-          item.document[DEFAULT_FIELD_CONTENT_VECTOR];
+        document.metadata.embedding = item.document[this.contentVectorField];
       }
       docsWithScore.push([document, item.score]);
     }
@@ -660,12 +682,12 @@ export class AzureAISearchVectorStore extends VectorStore {
             prioritizedFields: {
               contentFields: [
                 {
-                  name: DEFAULT_FIELD_CONTENT,
+                  name: this.contentField,
                 },
               ],
               keywordsFields: [
                 {
-                  name: DEFAULT_FIELD_CONTENT,
+                  name: this.contentField,
                 },
               ],
             },
@@ -680,29 +702,29 @@ export class AzureAISearchVectorStore extends VectorStore {
           type: "Edm.String",
         },
         {
-          name: DEFAULT_FIELD_CONTENT,
+          name: this.contentField,
           searchable: true,
           filterable: true,
           type: "Edm.String",
         },
         {
-          name: DEFAULT_FIELD_CONTENT_VECTOR,
+          name: this.contentVectorField,
           searchable: true,
           type: "Collection(Edm.Single)",
           vectorSearchDimensions: embeddingDimensions,
           vectorSearchProfileName: "vector-search-profile",
         },
         {
-          name: DEFAULT_FIELD_METADATA,
+          name: this.metadataField,
           type: "Edm.ComplexType",
           fields: [
             {
-              name: DEFAULT_FIELD_METADATA_SOURCE,
+              name: this.metadataSourceField,
               type: "Edm.String",
               filterable: true,
             },
             {
-              name: DEFAULT_FIELD_METADATA_ATTRS,
+              name: this.metadataAttrsField,
               type: "Collection(Edm.ComplexType)",
               fields: [
                 {
