@@ -1,4 +1,4 @@
-import { load as coreLoad } from "@langchain/core/load";
+import { load as coreLoad, type LoadOptions } from "@langchain/core/load";
 import { optionalImportEntrypoints } from "./import_constants.js";
 import * as importMap from "./import_map.js";
 import { OptionalImportMap } from "./import_type.js";
@@ -10,6 +10,8 @@ import { OptionalImportMap } from "./import_type.js";
  * @param text Serialized text representation of the module.
  * @param secretsMap
  * @param optionalImportsMap
+ * @param options Environment secrets are disabled by default. Only enable them
+ * for trusted serialized text; import maps must also be trusted.
  * @returns A loaded instance of a LangChain module.
  */
 export async function load<T>(
@@ -17,9 +19,11 @@ export async function load<T>(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   secretsMap: Record<string, any> = {},
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  optionalImportsMap: OptionalImportMap & Record<string, any> = {}
+  optionalImportsMap: OptionalImportMap & Record<string, any> = {},
+  options: Pick<LoadOptions, "secretsFromEnv" | "maxDepth"> = {}
 ): Promise<T> {
   return coreLoad(text, {
+    ...options,
     secretsMap,
     optionalImportsMap,
     optionalImportEntrypoints,

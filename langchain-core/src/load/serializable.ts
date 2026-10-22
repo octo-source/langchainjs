@@ -1,4 +1,5 @@
 import { type SerializedFields, keyToJson, mapKeys } from "./map_keys.js";
+import { escapeIfNeeded, isEscapedObject } from "./validation.js";
 
 export interface BaseSerialized<T extends string> {
   lc: number;
@@ -29,7 +30,8 @@ function shallowCopy<T extends object>(obj: T): T {
 
 function replaceSecrets(
   root: SerializedFields,
-  secretsMap: { [key: string]: string }
+  secretsMap: { [key: string]: string },
+  secretMarkers: WeakSet<object>
 ): SerializedFields {
   const result = shallowCopy(root);
   for (const [path, secretId] of Object.entries(secretsMap)) {
@@ -40,15 +42,35 @@ function replaceSecrets(
       if (current[part] === undefined) {
         break;
       }
+      if (
+        current[part] !== null &&
+        typeof current[part] === "object" &&
+        ("lc" in current[part] || isEscapedObject(current[part]))
+      ) {
+        // Escaped user data must remain inert. Its new wrapper would otherwise
+        // hide this declared secret path and silently serialize the plaintext.
+        throw new Error(
+          `Cannot serialize secret path "${path}" through escaped user data`
+        );
+      }
+      if (typeof current[part]?.toJSON === "function") {
+        // A hook can rename or copy a secret before its declared path is
+        // redacted. Do not invoke it or silently change its JSON semantics.
+        throw new Error(
+          `Cannot serialize secret path "${path}" through a JSON hook`
+        );
+      }
       current[part] = shallowCopy(current[part]);
       current = current[part];
     }
     if (current[last] !== undefined) {
-      current[last] = {
+      const marker: SerializedSecret = {
         lc: 1,
         type: "secret",
         id: [secretId],
       };
+      secretMarkers.add(marker);
+      current[last] = marker;
     }
   }
   return result;
@@ -206,15 +228,25 @@ export abstract class Serializable implements SerializableInterface {
       }
     });
 
+    // Redact first: normalization may invoke JSON hooks that can transform
+    // secret paths. Preserve only serializer-created markers by identity.
+    const secretMarkers = new WeakSet<object>();
+    const redactedKwargs = Object.keys(secrets).length
+      ? replaceSecrets(kwargs, secrets, secretMarkers)
+      : kwargs;
+    const pathSet = new WeakSet<object>([this]);
+    const escapedKwargs = Object.fromEntries(
+      Object.entries(redactedKwargs).map(([key, value]) => [
+        key,
+        escapeIfNeeded(value, pathSet, keyToJson(key, aliases), secretMarkers),
+      ])
+    );
+
     return {
       lc: 1,
       type: "constructor",
       id: this.lc_id,
-      kwargs: mapKeys(
-        Object.keys(secrets).length ? replaceSecrets(kwargs, secrets) : kwargs,
-        keyToJson,
-        aliases
-      ),
+      kwargs: mapKeys(escapedKwargs, keyToJson, aliases),
     };
   }
 
