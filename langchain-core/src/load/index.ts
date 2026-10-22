@@ -10,6 +10,20 @@ import * as coreImportMap from "./import_map.js";
 import type { OptionalImportMap, SecretMap } from "./import_type.js";
 import { type SerializedFields, keyFromJson, mapKeys } from "./map_keys.js";
 import { getEnvironmentVariable } from "../utils/env.js";
+import { isEscapedObject, LC_ESCAPED_KEY } from "./validation.js";
+
+/** Options for loading trusted serialized LangChain objects. */
+export interface LoadOptions {
+  secretsMap?: SecretMap;
+  /** Read environment secrets only when explicitly enabled for trusted data. */
+  secretsFromEnv?: boolean;
+  /** Only provide trusted modules: their constructors may perform side effects. */
+  optionalImportsMap?: OptionalImportMap;
+  optionalImportEntrypoints?: string[];
+  importMap?: Record<string, unknown>;
+  /** Maximum deserialization depth; defaults to 50. */
+  maxDepth?: number;
+}
 
 function combineAliasesAndInvert(constructor: typeof Serializable) {
   const aliases: { [key: string]: string } = {};
@@ -28,12 +42,9 @@ function combineAliasesAndInvert(constructor: typeof Serializable) {
 }
 
 async function reviver(
-  this: {
-    optionalImportsMap?: OptionalImportMap;
-    optionalImportEntrypoints?: string[];
-    secretsMap?: SecretMap;
-    importMap?: Record<string, unknown>;
+  this: LoadOptions & {
     path?: string[];
+    depth?: number;
   },
   value: unknown
 ): Promise<unknown> {
@@ -42,9 +53,26 @@ async function reviver(
     optionalImportEntrypoints = [],
     importMap = {},
     secretsMap = {},
+    secretsFromEnv = false,
+    maxDepth = 50,
+    depth = 0,
     path = ["$"],
   } = this;
   const pathStr = path.join(".");
+  if (depth > maxDepth) {
+    throw new Error(
+      `Maximum recursion depth (${maxDepth}) exceeded during deserialization.`
+    );
+  }
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    isEscapedObject(value as Record<string, unknown>)
+  ) {
+    // The entire wrapped value is user data, including any nested LC markers.
+    return (value as Record<string, unknown>)[LC_ESCAPED_KEY];
+  }
   if (
     typeof value === "object" &&
     value !== null &&
@@ -59,16 +87,13 @@ async function reviver(
     const [key] = serialized.id;
     if (key in secretsMap) {
       return secretsMap[key as keyof SecretMap];
-    } else {
+    } else if (secretsFromEnv) {
       const secretValueInEnv = getEnvironmentVariable(key);
       if (secretValueInEnv) {
         return secretValueInEnv;
-      } else {
-        throw new Error(
-          `Missing key "${key}" for ${pathStr} in load(secretsMap={})`
-        );
       }
     }
+    throw new Error(`Missing secret "${key}" at ${pathStr}`);
   } else if (
     typeof value === "object" &&
     value !== null &&
@@ -187,7 +212,7 @@ async function reviver(
 
     // Recurse on the arguments, which may be serialized objects themselves
     const kwargs = await reviver.call(
-      { ...this, path: [...path, "kwargs"] },
+      { ...this, path: [...path, "kwargs"], depth: depth + 1 },
       serialized.kwargs
     );
 
@@ -215,7 +240,10 @@ async function reviver(
     if (Array.isArray(value)) {
       return Promise.all(
         value.map((v, i) =>
-          reviver.call({ ...this, path: [...path, `${i}`] }, v)
+          reviver.call(
+            { ...this, path: [...path, `${i}`], depth: depth + 1 },
+            v
+          )
         )
       );
     } else {
@@ -223,7 +251,10 @@ async function reviver(
         await Promise.all(
           Object.entries(value).map(async ([key, value]) => [
             key,
-            await reviver.call({ ...this, path: [...path, key] }, value),
+            await reviver.call(
+              { ...this, path: [...path, key], depth: depth + 1 },
+              value
+            ),
           ])
         )
       );
@@ -232,14 +263,15 @@ async function reviver(
   return value;
 }
 
+/**
+ * Load a trusted serialized object. Secrets require an explicit map by default.
+ * Never pass untrusted import maps or enable environment secrets for untrusted
+ * serialized text. Escaping protects data serialized through Serializable;
+ * arbitrary raw serialized text can still request allowed constructors.
+ */
 export async function load<T>(
   text: string,
-  mappings?: {
-    secretsMap?: SecretMap;
-    optionalImportsMap?: OptionalImportMap;
-    optionalImportEntrypoints?: string[];
-    importMap?: Record<string, unknown>;
-  }
+  mappings?: LoadOptions
 ): Promise<T> {
   const json = JSON.parse(text);
   return reviver.call({ ...mappings }, json) as Promise<T>;

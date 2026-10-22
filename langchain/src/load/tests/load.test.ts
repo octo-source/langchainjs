@@ -154,8 +154,9 @@ test("serialize + deserialize llm", async () => {
   });
   expect(llm2).toBeInstanceOf(OpenAI);
   expect(JSON.stringify(llm2, null, 2)).toBe(str);
-  // Accept secret as env var
-  const llm3 = await load<OpenAI>(str);
+  // Environment secrets require an explicit opt-in.
+  await expect(load<OpenAI>(str)).rejects.toThrow(/Missing secret/);
+  const llm3 = await load<OpenAI>(str, {}, {}, { secretsFromEnv: true });
   expect(llm3).toBeInstanceOf(OpenAI);
   expect(llm.openAIApiKey).toBe(llm3.openAIApiKey);
   expect(JSON.stringify(llm3, null, 2)).toBe(str);
@@ -245,9 +246,13 @@ test("serialize + deserialize runnable sequence with new and old ids", async () 
     ...JSON.parse(strWithNewId),
     id: ["langchain", "schema", "runnable", "RunnableSequence"],
   });
-  const runnable2 = await load<RunnableSequence>(strWithOldId);
+  const runnable2 = await load<RunnableSequence>(strWithOldId, {
+    OPENAI_API_KEY: "openai-key",
+  });
   expect(runnable2).toBeInstanceOf(RunnableSequence);
-  const runnable3 = await load<RunnableSequence>(strWithNewId);
+  const runnable3 = await load<RunnableSequence>(strWithNewId, {
+    OPENAI_API_KEY: "openai-key",
+  });
   expect(runnable3).toBeInstanceOf(RunnableSequence);
 });
 
